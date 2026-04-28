@@ -1,15 +1,19 @@
+import os
 import discord
 from discord import app_commands
 from discord.ext import commands
 import random
 import asyncio
-import json
-import os
+from supabase import create_client, Client
+from dotenv import load_dotenv
 
-# Caminho para salvar o estado das passivas
-PASSIVAS_PATH = "./jackpot_passivas.json"
+load_dotenv()
 
-# Link do GIF do Hakari (Link direto para melhor carregamento)
+# Configuração do Supabase
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
+
 GIF_HAKARI_DANCE = "https://media.tenor.com/7Y-j_rP9l_QAAAAd/hakari-dance-hakari-kinji.gif"
 
 FALAS_GIRO = [
@@ -27,21 +31,21 @@ FALAS_JACKPOT = [
     "Estou no meu auge! Ninguém pode me parar agora!"
 ]
 
-def load_passivas():
-    if not os.path.exists(PASSIVAS_PATH): return {}
-    try:
-        with open(PASSIVAS_PATH, "r", encoding="utf-8") as f: return json.load(f)
-    except: return {}
-
-def save_passivas(data):
-    with open(PASSIVAS_PATH, "w", encoding="utf-8") as f: 
-        json.dump(data, f, indent=4, ensure_ascii=False)
-
 class ComandoJackpot(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def get_passiva(self, user_id: str):
+        """Busca a passiva atual do jogador no banco"""
+        res = supabase.table("jackpot_data").select("passiva_atual").eq("user_id", user_id).execute()
+        return res.data[0]["passiva_atual"] if res.data else "padrao"
+
+    async def save_passiva(self, user_id: str, passiva: str):
+        """Salva a nova passiva no banco"""
+        supabase.table("jackpot_data").upsert({"user_id": user_id, "passiva_atual": passiva}).execute()
+
     async def realizar_giro(self, interaction, passiva_ativa, is_second_roll=False):
+        # Lógica de Pesos
         pesos = [60, 25, 12, 3]
         if passiva_ativa == "sorte":
             pesos = [15, 45, 35, 5] 
@@ -56,6 +60,7 @@ class ComandoJackpot(commands.Cog):
         sorteio_moeda = random.choices(moedas_info, weights=pesos, k=1)[0]
         sucesso_moeda = random.randint(1, 100) <= sorteio_moeda["chance"]
         
+        # Sorteio dos Dados
         if sorteio_moeda["nome"] == "Platina":
             d1, d2, d3 = 7, 7, 7
         elif sucesso_moeda:
@@ -72,6 +77,7 @@ class ComandoJackpot(commands.Cog):
             color=0x2b2d31
         )
         
+        # Gerenciamento da resposta (Interaction vs Followup)
         if not is_second_roll:
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=embed)
@@ -84,7 +90,7 @@ class ComandoJackpot(commands.Cog):
         embed.color = sorteio_moeda["cor"]
         await msg.edit(embed=embed)
 
-        # Animação
+        # Animação de sorteio
         for _ in range(3):
             f1, f2, f3 = random.randint(1, 7), random.randint(1, 7), random.randint(1, 7)
             embed.clear_fields()
@@ -113,9 +119,9 @@ class ComandoJackpot(commands.Cog):
     @app_commands.command(name="jackpot", description="Gira a roleta do Hakari")
     async def jackpot(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
-        passivas = load_passivas()
-        passiva_atual = passivas.get(user_id, "padrao")
         
+        # Busca passiva no Supabase
+        passiva_atual = await self.get_passiva(user_id)
         resultados_finais = []
         
         if passiva_atual == "duplo":
@@ -123,32 +129,33 @@ class ComandoJackpot(commands.Cog):
             res1, jack1 = await self.realizar_giro(interaction, "duplo", is_second_roll=False)
             resultados_finais.append(res1)
             
-            # Se acertou Jackpot no primeiro, PARA TUDO.
             if jack1:
-                await interaction.followup.send(f"💎 {interaction.user.mention} ACERTOU O JACKPOT DE PRIMEIRA NO DUPLO! O segundo giro foi cancelado.")
+                await interaction.followup.send(f"💎 {interaction.user.mention} ACERTOU O JACKPOT DE PRIMEIRA! Sorte absoluta!")
             else:
-                # Só gira o segundo se o primeiro NÃO for jackpot
+                # Segundo Giro (Passiva Duplo)
                 res2, jack2 = await self.realizar_giro(interaction, "duplo", is_second_roll=True)
                 resultados_finais.append(res2)
         else:
             res, jack = await self.realizar_giro(interaction, passiva_atual)
             resultados_finais.append(res)
 
-        # Lógica de atualização de passiva baseada no ÚLTIMO giro realizado
+        # Lógica de atualização de passiva baseada no ÚLTIMO dado sorteado
         d1, d2, d3 = resultados_finais[-1]
         todos_pares = (d1 % 2 == 0 and d2 % 2 == 0 and d3 % 2 == 0)
         todos_impares = (d1 % 2 != 0 and d2 % 2 != 0 and d3 % 2 != 0)
 
+        nova_passiva = passiva_atual
+        msg_passiva = f"ℹ️ Dados mistos. Sua passiva (**{passiva_atual.upper()}**) continua ativa."
+
         if todos_pares:
-            passivas[user_id] = "duplo"
+            nova_passiva = "duplo"
             msg_passiva = f"✨ {interaction.user.mention} conseguiu uma **TRINCA DE PARES!** Próxima passiva: **DUPLO**"
         elif todos_impares:
-            passivas[user_id] = "sorte"
+            nova_passiva = "sorte"
             msg_passiva = f"✨ {interaction.user.mention} conseguiu uma **TRINCA DE ÍMPARES!** Próxima passiva: **SORTE**"
-        else:
-            msg_passiva = f"ℹ️ Dados mistos. A passiva de {interaction.user.mention} (**{passiva_atual.upper()}**) continua ativa."
 
-        save_passivas(passivas)
+        # Salva a nova passiva no Supabase
+        await self.save_passiva(user_id, nova_passiva)
         await interaction.followup.send(msg_passiva)
 
 async def setup(bot):
