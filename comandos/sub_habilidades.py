@@ -1,21 +1,17 @@
+import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-import json
-import os
+from supabase import create_client, Client
+from typing import Literal
 import math
+from dotenv import load_dotenv
 
-SUB_HAB_PATH = "./player_sub_skills.json"
+load_dotenv()
 
-def load_data():
-    if not os.path.exists(SUB_HAB_PATH): return {}
-    try:
-        with open(SUB_HAB_PATH, "r", encoding="utf-8") as f: return json.load(f)
-    except: return {}
-
-def save_data(data):
-    with open(SUB_HAB_PATH, "w", encoding="utf-8") as f: 
-        json.dump(data, f, indent=4, ensure_ascii=False)
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
 # --- SISTEMA DE PAGINAÇÃO ---
 class SubHabilidadesPaginator(discord.ui.View):
@@ -35,7 +31,7 @@ class SubHabilidadesPaginator(discord.ui.View):
 
         embed = discord.Embed(
             title=f"📜 SUB-HABILIDADES: {self.target.display_name.upper()}",
-            description=f"Página {self.current_page + 1} de {self.max_pages}\nNível de domínio sobre técnicas secundárias.",
+            description=f"Página {self.current_page + 1} de {self.max_pages}\nDomínio sobre técnicas secundárias.",
             color=0x2b2d31
         )
         embed.set_thumbnail(url=self.target.display_avatar.url)
@@ -43,14 +39,13 @@ class SubHabilidadesPaginator(discord.ui.View):
         for skill in current_skills:
             info = skill['info']
             barra = self.cog.criar_barra_progresso(info["exp"])
-            texto = f"```md\n# Progresso para o próximo nível\n{barra}\n```"
             embed.add_field(
                 name=f"{info['emoji']} {info['nome']} (Nível {info['nivel']}/{info['max_nivel']})",
-                value=texto,
+                value=f"```md\n# Progresso\n{barra}\n```",
                 inline=False
             )
         
-        embed.set_footer(text="Jujutsu Golden Age • Use os botões para navegar")
+        embed.set_footer(text="Jujutsu Golden Age • Navegue pelos botões")
         return embed
 
     @discord.ui.button(label="◀️", style=discord.ButtonStyle.gray)
@@ -73,6 +68,13 @@ class SubHabilidadesSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def get_sub_data(self, user_id: str):
+        res = supabase.table("player_sub_skills").select("data").eq("user_id", user_id).execute()
+        return res.data[0]["data"] if res.data else None
+
+    async def save_sub_data(self, user_id: str, data: dict):
+        supabase.table("player_sub_skills").upsert({"user_id": user_id, "data": data}).execute()
+
     def criar_barra_progresso(self, atual, max_exp=10):
         tamanho_barra = 10
         progresso = max(0, min(max_exp, atual))
@@ -80,82 +82,70 @@ class SubHabilidadesSystem(commands.Cog):
         vazios = tamanho_barra - cheios
         return f"[{'▉' * cheios}{'░' * vazios}] {progresso}/{max_exp}"
 
-    def inicializar_usuario(self, user_id, data):
-        if user_id not in data:
-            data[user_id] = {
-                "skills": {
-                    "reserva_de_energia": {
-                        "nome": "Maestria de Reserva de Energia",
-                        "nivel": 1,
-                        "max_nivel": 100,
-                        "exp": 0,
-                        "emoji": "✨"
-                    }
-                }
-            }
-        return data
-
-    @app_commands.command(name="sub_habilidades", description="Consulta suas sub-habilidades e maestrias")
+    @app_commands.command(name="sub_habilidades", description="Consulta sub-habilidades")
     async def sub_habilidades(self, interaction: discord.Interaction, usuario: discord.Member = None):
         target = usuario or interaction.user
         user_id = str(target.id)
-        data = load_data()
-        data = self.inicializar_usuario(user_id, data)
-        save_data(data)
-
-        skills_dict = data[user_id]["skills"]
         
-        if not skills_dict:
-            return await interaction.response.send_message(f"O usuário {target.display_name} não possui sub-habilidades.")
+        user_data = await self.get_sub_data(user_id)
 
-        # Converte o dicionário em uma lista para facilitar a paginação
+        if not user_data:
+            # Inicializa com a reserva de energia padrão
+            user_data = {
+                "skills": {
+                    "reserva_de_energia": {
+                        "nome": "Maestria de Reserva de Energia",
+                        "nivel": 1, "max_nivel": 100, "exp": 0, "emoji": "✨"
+                    }
+                }
+            }
+            await self.save_sub_data(user_id, user_data)
+
+        skills_dict = user_data["skills"]
         skills_list = [{"key": k, "info": v} for k, v in skills_dict.items()]
         
         view = SubHabilidadesPaginator(target, skills_list, self)
         await interaction.response.send_message(embed=view.create_embed(), view=view)
 
-    @app_commands.command(name="add_sub_habilidade", description="[MESTRE] Adiciona uma nova sub-habilidade a um jogador")
+    @app_commands.command(name="add_sub_habilidade", description="[ADM] Adiciona sub-habilidade")
     @app_commands.checks.has_permissions(administrator=True)
-    async def add_sub_habilidade(self, interaction: discord.Interaction, usuario: discord.Member, nome: str, emoji: str = "🔹"):
+    async def add_sub_habilidade(self, interaction: discord.Interaction, usuario: discord.Member, nome: str, emoji: str = "🔹", max_nivel: int = 10):
         user_id = str(usuario.id)
-        data = load_data()
-        data = self.inicializar_usuario(user_id, data)
+        user_data = await self.get_sub_data(user_id) or {"skills": {}}
 
         skill_key = nome.lower().replace(" ", "_")
-        if skill_key in data[user_id]["skills"]:
-            return await interaction.response.send_message("❌ O jogador já possui essa sub-habilidade.", ephemeral=True)
+        if skill_key in user_data["skills"]:
+            return await interaction.response.send_message("❌ O jogador já possui essa técnica.", ephemeral=True)
 
-        data[user_id]["skills"][skill_key] = {
-            "nome": nome,
-            "nivel": 0,
-            "max_nivel": 10,
-            "exp": 0,
-            "emoji": emoji
+        user_data["skills"][skill_key] = {
+            "nome": nome, "nivel": 0, "max_nivel": max_nivel, "exp": 0, "emoji": emoji
         }
         
-        save_data(data)
-        await interaction.response.send_message(f"✅ Sub-habilidade **{nome}** adicionada para {usuario.mention}!")
+        await self.save_sub_data(user_id, user_data)
+        await interaction.response.send_message(f"✅ **{nome}** vinculada a {usuario.mention}!")
 
-    @app_commands.command(name="add_maestria_sub", description="[MESTRE] Adiciona progresso a uma sub-habilidade")
+    @app_commands.command(name="add_maestria_sub", description="[ADM] Adiciona EXP em sub-habilidade")
     @app_commands.checks.has_permissions(administrator=True)
     async def add_maestria_sub(self, interaction: discord.Interaction, usuario: discord.Member, nome_da_sub: str, quantidade: int):
         user_id = str(usuario.id)
-        data = load_data()
+        user_data = await self.get_sub_data(user_id)
         
-        if user_id not in data:
-            return await interaction.response.send_message("❌ Usuário sem sub-habilidades.", ephemeral=True)
+        if not user_data or "skills" not in user_data:
+            return await interaction.response.send_message("❌ Usuário sem registros.", ephemeral=True)
 
+        # Busca flexível pelo nome ou key
         target_skill = None
-        for key, info in data[user_id]["skills"].items():
-            if nome_da_sub.lower() in info["nome"].lower() or nome_da_sub.lower() == key:
+        search_term = nome_da_sub.lower()
+        for key, info in user_data["skills"].items():
+            if search_term in info["nome"].lower() or search_term == key:
                 target_skill = info
                 break
         
         if not target_skill:
-            return await interaction.response.send_message(f"❌ Sub-habilidade '{nome_da_sub}' não encontrada.", ephemeral=True)
+            return await interaction.response.send_message(f"❌ Técnica '{nome_da_sub}' não encontrada.", ephemeral=True)
 
         if target_skill["nivel"] >= target_skill["max_nivel"]:
-            return await interaction.response.send_message("⭐ Esta habilidade já está no nível máximo!", ephemeral=True)
+            return await interaction.response.send_message("⭐ Nível máximo já alcançado!", ephemeral=True)
 
         target_skill["exp"] += quantidade
         msg_up = ""
@@ -164,12 +154,12 @@ class SubHabilidadesSystem(commands.Cog):
             if target_skill["nivel"] < target_skill["max_nivel"]:
                 target_skill["exp"] -= 10
                 target_skill["nivel"] += 1
-                msg_up = f"\n🎊 **LEVEL UP!** {target_skill['nome']} subiu para o nível {target_skill['nivel']}!"
+                msg_up = f"\n🎊 **LEVEL UP!** {target_skill['nome']} foi para o nível {target_skill['nivel']}!"
             else:
                 target_skill["exp"] = 0
                 break
 
-        save_data(data)
+        await self.save_sub_data(user_id, user_data)
         barra = self.criar_barra_progresso(target_skill["exp"])
         await interaction.response.send_message(
             f"📈 **Maestria Atualizada!** ({usuario.display_name})\n{target_skill['emoji']} **{target_skill['nome']}**: {barra}{msg_up}"
