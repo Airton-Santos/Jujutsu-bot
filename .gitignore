@@ -7,7 +7,7 @@ venv/
 env/
 
 # Cache do Python
-__pycache__/
+__pycache__
 *.pyc
 
 # Arquivos de log e banco de dados local (JSONs)
