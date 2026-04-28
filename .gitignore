@@ -1,0 +1,18 @@
+# Arquivos de ambiente (SEGURANÇA)
+.env
+
+# Pastas de ambiente virtual
+venv/
+.venv/
+env/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Arquivos de log e banco de dados local (JSONs)
+*.json
+*.log
+
+# Pasta de módulos (caso use Node no futuro ou extensões)
+node_modules/
