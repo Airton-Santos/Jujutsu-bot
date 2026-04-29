@@ -32,7 +32,7 @@ class StatusSystem(commands.Cog):
         vazios = tamanho - cheios
         return f"**[{'▉' * cheios}{'░' * vazios}]**"
 
-    @app_commands.command(name="status", description="Exibe seus status com aura visual")
+    @app_commands.command(name="status", description="Exibe status com aura visual")
     async def status(self, interaction: discord.Interaction, usuario: discord.Member = None):
         await interaction.response.defer()
         target = usuario or interaction.user
@@ -42,7 +42,7 @@ class StatusSystem(commands.Cog):
         
         if not stats:
             return await interaction.followup.send(
-                f"❌ {target.mention} não possui registros. Use `/set_status` primeiro!", 
+                f"❌ {target.mention} não possui registros de status.", 
                 ephemeral=True
             )
 
@@ -51,12 +51,11 @@ class StatusSystem(commands.Cog):
 
         embed = discord.Embed(
             title=f"🌀 Aura de Feiticeiro: {target.display_name}",
-            description="Status atuais de combate e energia amaldiçoadas.",
+            description="Status atuais de combate e energia amaldiçoada.",
             color=0x00ffff
         )
         embed.set_thumbnail(url=target.display_avatar.url)
 
-        # Barra de Vida
         barra_hp = self.criar_barra_aura(hp_a, hp_m)
         embed.add_field(
             name=f"❤️ Vitalidade: {hp_a} / {hp_m}",
@@ -64,7 +63,6 @@ class StatusSystem(commands.Cog):
             inline=False
         )
         
-        # Barra de Energia
         barra_en = self.criar_barra_aura(en_a, en_m)
         embed.add_field(
             name=f"✨ Energia: {en_a} / {en_m}",
@@ -81,8 +79,9 @@ class StatusSystem(commands.Cog):
                          usuario: discord.Member = None):
         await interaction.response.defer(ephemeral=True)
 
-        if usuario and not interaction.user.guild_permissions.administrator:
-            return await interaction.followup.send("❌ Permissão insuficiente.", ephemeral=True)
+        # Apenas admin pode setar status de outros ou de si mesmo (para evitar trapaça)
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.followup.send("❌ Apenas administradores podem definir status base.", ephemeral=True)
 
         target = usuario or interaction.user
         new_stats = {
@@ -93,17 +92,27 @@ class StatusSystem(commands.Cog):
         await self.save_player_status(str(target.id), new_stats)
         await interaction.followup.send(f"✅ Status de {target.mention} configurados no banco de dados!")
 
-    @app_commands.command(name="modificar_status", description="Modifica vida ou energia")
+    @app_commands.command(name="modificar_status", description="Modifica vida ou energia de um jogador")
     async def modificar_status(self, interaction: discord.Interaction, 
+                               alvo: discord.Member,
                                tipo: Literal["Vida", "Energia"], 
                                quantidade: int, 
                                modo: Literal["Número Fixo", "Porcentagem (%)"]):
+        """
+        alvo: @usuario que receberá a alteração
+        quantidade: valor positivo para curar/ganhar, valor negativo para tirar vida/energia
+        """
         await interaction.response.defer()
-        user_id = str(interaction.user.id)
+        
+        # Opcional: Trava para que apenas quem tem permissão de gerenciar mensagens (Mestre) possa usar em outros
+        if alvo != interaction.user and not interaction.user.guild_permissions.manage_messages:
+            return await interaction.followup.send("❌ Você não tem permissão para modificar o status de outros jogadores.", ephemeral=True)
+
+        user_id = str(alvo.id)
         stats = await self.get_player_status(user_id)
 
         if not stats:
-            return await interaction.followup.send("❌ Status não encontrados.", ephemeral=True)
+            return await interaction.followup.send(f"❌ Status de {alvo.mention} não encontrados no banco.", ephemeral=True)
 
         chave_atual = "hp_atual" if tipo == "Vida" else "en_atual"
         chave_max = "hp_max" if tipo == "Vida" else "en_max"
@@ -120,8 +129,10 @@ class StatusSystem(commands.Cog):
         await self.save_player_status(user_id, stats)
 
         emoji = "❤️" if tipo == "Vida" else "✨"
+        verbo = "reduzido" if quantidade < 0 else "aumentado"
+        
         await interaction.followup.send(
-            f"✅ **Update de {tipo}!**\n{emoji} Novo Valor: `{stats[chave_atual]} / {stats[chave_max]}`"
+            f"✅ **Update de {tipo} para {alvo.mention}!**\n{emoji} Novo Valor: `{stats[chave_atual]} / {stats[chave_max]}` (Valor {verbo} em: `{modificador}`)"
         )
 
 async def setup(bot):
