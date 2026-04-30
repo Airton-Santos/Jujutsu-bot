@@ -3,7 +3,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from supabase import create_client, Client
-from typing import Literal
+from typing import Literal, Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,15 +32,16 @@ class HabilidadesSystem(commands.Cog):
         vazios = tamanho_barra - cheios
         return f"[{'▉' * cheios}{'░' * vazios}] {progresso}/{maximo}"
 
-    @app_commands.command(name="habilidades", description="Consulta suas técnicas")
-    async def habilidades(self, interaction: discord.Interaction, usuario: discord.Member = None):
+    @app_commands.command(name="habilidades", description="Consulta as técnicas de um feiticeiro")
+    async def habilidades(self, interaction: discord.Interaction, usuario: Optional[discord.Member] = None):
+        await interaction.response.defer()
         target = usuario or interaction.user
         user_id = str(target.id)
         
         skills = await self.get_player_data(user_id)
 
         if not skills:
-            # Cria o objeto único com todas as skills dentro
+            # Inicializa dados caso não existam
             skills = {
                 "Habilidade 1": {"nome": "Habilidade 1", "nivel": 0, "exp": 0, "emoji": "🟢"},
                 "Habilidade 2": {"nome": "Habilidade 2", "nivel": 0, "exp": 0, "emoji": "🔵"},
@@ -64,51 +65,72 @@ class HabilidadesSystem(commands.Cog):
             )
 
         embed.set_footer(text="Jujutsu Golden Age • Bagre System")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="set_nome_habilidade")
+    @app_commands.command(name="set_nome_habilidade", description="Altera o nome de uma técnica")
     async def set_nome_habilidade(self, interaction: discord.Interaction, 
                                    slot: Literal["Habilidade 1", "Habilidade 2", "Habilidade 3", "Habilidade 4", "Passiva", "Expansão"], 
-                                   nome: str):
-        user_id = str(interaction.user.id)
+                                   nome: str,
+                                   usuario: Optional[discord.Member] = None):
+        """Permite mudar o nome das próprias habilidades ou de terceiros (se for admin)"""
+        target = usuario or interaction.user
+        
+        # Trava de segurança: se mudar de outro, precisa ser admin
+        if target != interaction.user and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Você só pode renomear suas próprias habilidades.", ephemeral=True)
+
+        user_id = str(target.id)
         skills = await self.get_player_data(user_id)
         
         if not skills:
-            return await interaction.response.send_message("❌ Use `/habilidades` primeiro.", ephemeral=True)
+            return await interaction.response.send_message(f"❌ {target.mention} não possui registros. Use `/habilidades` primeiro.", ephemeral=True)
 
         skills[slot]["nome"] = nome
         await self.save_player_data(user_id, skills)
-        await interaction.response.send_message(f"✅ Slot **{slot}** agora se chama **{nome}**!", ephemeral=True)
+        await interaction.response.send_message(f"✅ Slot **{slot}** de {target.mention} agora se chama **{nome}**!")
 
-    @app_commands.command(name="add_maestria")
+    @app_commands.command(name="add_maestria", description="Adiciona experiência a uma técnica específica")
     async def add_maestria(self, interaction: discord.Interaction, 
+                            alvo: discord.Member,
                             slot: Literal["Habilidade 1", "Habilidade 2", "Habilidade 3", "Habilidade 4", "Passiva", "Expansão"], 
                             quantidade: int):
-        user_id = str(interaction.user.id)
+        """Adiciona progresso a um jogador específico"""
+        
+        # Trava para apenas Mestres/Admins usarem
+        if not interaction.user.guild_permissions.manage_messages:
+            return await interaction.response.send_message("❌ Apenas Mestres podem atribuir maestria.", ephemeral=True)
+
+        user_id = str(alvo.id)
         skills = await self.get_player_data(user_id)
 
         if not skills:
-            return await interaction.response.send_message("❌ Status não encontrados.", ephemeral=True)
+            return await interaction.response.send_message(f"❌ {alvo.mention} não tem dados de habilidades.", ephemeral=True)
 
         skill = skills[slot]
         if skill["nivel"] >= 10:
-            return await interaction.response.send_message(f"⭐ **{skill['nome']}** já está no máximo!", ephemeral=True)
+            return await interaction.response.send_message(f"⭐ **{skill['nome']}** de {alvo.mention} já está no nível máximo!", ephemeral=True)
 
         skill["exp"] += quantidade
         msg_up = ""
 
+        # Lógica de Level Up (10 exp = 1 nível)
         while skill["exp"] >= 10:
             if skill["nivel"] < 10:
                 skill["exp"] -= 10
                 skill["nivel"] += 1
-                msg_up = f"\n🎊 **LEVEL UP!** {skill['nome']} subiu para nível {skill['nivel']}!"
+                msg_up += f"\n🎊 **LEVEL UP!** {alvo.mention}: {skill['nome']} subiu para nível {skill['nivel']}!"
+            
             if skill["nivel"] >= 10:
                 skill["exp"] = 0
                 break
 
         await self.save_player_data(user_id, skills)
         barra = self.criar_barra_progresso(skill["exp"])
-        await interaction.response.send_message(f"📈 **Maestria Adicionada!**\n{skill['emoji']} **{skill['nome']}**: {barra}{msg_up}")
+        
+        await interaction.response.send_message(
+            f"📈 **Maestria Adicionada para {alvo.mention}!**\n"
+            f"{skill['emoji']} **{skill['nome']}**: {barra}{msg_up}"
+        )
 
 async def setup(bot):
     await bot.add_cog(HabilidadesSystem(bot))
