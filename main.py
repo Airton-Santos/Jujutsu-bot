@@ -3,51 +3,60 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 
-# Carregar o token
+# Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Intents: Para Slash puro, o 'message_content' é opcional, 
-# mas recomendo manter se for usar log de mensagens ou filtros.
+# Configuração de Intents (Permissões do Bot)
 intents = discord.Intents.default()
 intents.members = True 
+intents.message_content = True  # Ative se precisar ler conteúdo de mensagens
 
 class JujutsuBot(commands.Bot):
     def __init__(self):
-        # Usamos o prefixo commands.when_mentioned para que o bot 
-        # NÃO responda a exclamações (!), apenas a comandos '/'
+        # O prefixo é configurado para menção para focar 100% em comandos Slash (/)
         super().__init__(
             command_prefix=commands.when_mentioned, 
             intents=intents,
-            help_command=None # Remove o comando !help padrão
+            help_command=None  # Remove o comando !help clássico
         )
 
     async def setup_hook(self):
-        print("--- 🔮 Carregando Técnicas Amaldiçoadas ---")
+        print("\n--- 🔮 Carregando Técnicas Amaldiçoadas (Cogs) ---")
         
-        # Garante que a pasta existe para não dar erro
+        # Cria a pasta de comandos caso ela não exista no clone do repositório
         if not os.path.exists('./comandos'):
             os.makedirs('./comandos')
+            print("📁 Pasta './comandos' criada automaticamente. Adicione seus arquivos de comando nela!")
 
+        # Varre a pasta de comandos para carregar cada extensão do bot
         for filename in os.listdir('./comandos'):
-            if filename.endswith('.py'):
+            if filename.endswith('.py') and not filename.startswith('__'):
                 try:
                     await self.load_extension(f'comandos.{filename[:-3]}')
-                    print(f'✅ Técnica: {filename[:-3]}')
+                    print(f'✅ Técnica carregada: {filename[:-3]}')
                 except Exception as e:
-                    print(f'❌ Falha em {filename[:-3]}: {e}')
+                    print(f'❌ Falha ao carregar {filename[:-3]}: {e}')
         
-        # Sincroniza os Slash Commands com o Discord globalmente
-        await self.tree.sync()
-        print("🌀 Expansões de Domínio (Slash) Sincronizadas!")
+        # Sincroniza os Slash Commands diretamente com a API do Discord
+        print("\n🌀 Sincronizando Expansões de Domínio (Slash Commands)...")
+        try:
+            await self.tree.sync()
+            print("✨ Todos os comandos Slash foram sincronizados globalmente!")
+        except Exception as e:
+            print(f'❌ Erro ao sincronizar comandos com o Discord: {e}')
 
     async def on_ready(self):
-        print('---' * 10)
-        print(f'🛡️ Feiticeiro Logado: {self.user.name}')
-        print(f'⚙️ Versão: 100% Slash Commands')
-        print('---' * 10)
+        print('=' * 40)
+        print(f'🛡️ Feiticeiro Logado com sucesso: {self.user.name}')
+        print(f'⚙️ Status: 100% pronto para usar Slash Commands (/)')
+        print('=' * 40)
 
 bot = JujutsuBot()
 
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    if not TOKEN:
+        print("🚨 ERRO: O 'DISCORD_TOKEN' não foi encontrado!")
+        print("👉 Verifique se você criou o arquivo '.env' na raiz do projeto com as suas credenciais.")
+    else:
+        bot.run(TOKEN)
