@@ -33,8 +33,8 @@ class SessionView(discord.ui.View):
         if any(p['id'] == str(user.id) for p in players):
             return await interaction.response.send_message("⚠️ Você já está nesta sessão!", ephemeral=True)
         
-        # Adiciona o novo player
-        players.append({"id": str(user.id), "nome": user.display_name})
+        # Adiciona o novo player com 0 pontos iniciais
+        players.append({"id": str(user.id), "nome": user.display_name, "pontos": 0})
         
         # Salva no banco
         supabase.table("sessions").update({"players": players}).eq("guild_id", str(interaction.guild_id)).execute()
@@ -92,10 +92,61 @@ class SessaoSystem(commands.Cog):
         if any(p['id'] == str(player.id) for p in players):
             return await interaction.response.send_message(f"⚠️ {player.display_name} já está na sessão.", ephemeral=True)
 
-        players.append({"id": str(player.id), "nome": player.display_name})
+        # Adiciona o jogador manualmente com 0 pontos iniciais
+        players.append({"id": str(player.id), "nome": player.display_name, "pontos": 0})
         supabase.table("sessions").update({"players": players}).eq("guild_id", str(interaction.guild_id)).execute()
 
         await interaction.response.send_message(f"✅ {player.mention} foi adicionado à sessão pelo mestre!")
+
+    @app_commands.command(name="sessao_pontos", description="Mestre (Oculto): Modifica os pontos de um jogador (Use números positivos ou negativos)")
+    @app_commands.describe(player="O jogador alvo", alteracao="Quantidade a alterar (Ex: 2 para somar, -2 para remover)")
+    async def alterar_pontos(self, interaction: discord.Interaction, player: discord.Member, alteracao: int):
+        if not interaction.user.guild_permissions.manage_messages:
+            return await interaction.response.send_message("❌ Apenas Mestres podem alterar os pontos.", ephemeral=True)
+
+        res = supabase.table("sessions").select("players").eq("guild_id", str(interaction.guild_id)).eq("status", "ativa").execute()
+        
+        if not res.data:
+            return await interaction.response.send_message("❌ Nenhuma sessão ativa encontrada.", ephemeral=True)
+
+        players = res.data[0]["players"]
+        player_encontrado = False
+        pontos_antigos = 0
+        pontos_novos = 0
+
+        for p in players:
+            if p['id'] == str(player.id):
+                player_encontrado = True
+                pontos_antigos = p.get('pontos', 0)
+                
+                # Realiza a soma matemática (adicionando valor positivo ou subtraindo negativo)
+                pontos_novos = pontos_antigos + alteracao
+                
+                # Trava as margens de limite entre 0 e 10
+                if pontos_novos > 10:
+                    pontos_novos = 10
+                elif pontos_novos < 0:
+                    pontos_novos = 0
+                    
+                p['pontos'] = pontos_novos
+                break
+
+        if not player_encontrado:
+            return await interaction.response.send_message(f"⚠️ {player.display_name} não está na sessão ativa atual.", ephemeral=True)
+
+        # Salva a alteração no banco de dados
+        supabase.table("sessions").update({"players": players}).eq("guild_id", str(interaction.guild_id)).execute()
+
+        # Determina o verbo correto para a mensagem secreta do mestre
+        acao = "adicionou" if alteracao >= 0 else "removeu"
+        mudanca = f"+{alteracao}" if alteracao >= 0 else f"{alteracao}"
+
+        await interaction.response.send_message(
+            f"🤫 **Alteração Oculta:** Você {acao} `{mudanca}` pontos para {player.display_name}.\n"
+            f"**Antes:** `{pontos_antigos}/10` ➡️ **Agora:** `{pontos_novos}/10`.\n"
+            f"Nenhum participante foi alertado.", 
+            ephemeral=True
+        )
 
     @app_commands.command(name="sessao_lista", description="Mostra quem está na sessão atual")
     async def lista(self, interaction: discord.Interaction):
@@ -107,6 +158,7 @@ class SessaoSystem(commands.Cog):
         players = res.data[0]["players"]
         mestre_id = res.data[0]["mestre_id"]
         
+        # Mantido oculto: exibe apenas os nomes normais na lista sem revelar os pontos acumulados
         lista_nomes = "\n".join([f"👤 {p['nome']}" for p in players]) if players else "Nenhum jogador ainda."
         
         embed = discord.Embed(title="📜 PARTICIPANTES DA SESSÃO", color=0x2b2d31)
